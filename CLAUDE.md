@@ -5,8 +5,8 @@ receives this folder — and their Claude — can start work without any other f
 history. Everything needed to run the current suite is here or in `README.md`.
 
 Owner: **Dev (Devendra Shekhawat)**, QA, Aviz Networks. Send results and questions to him.
-Created: 2026-09-29. Last updated: 2026-10-08 (two GPU-metric connectors added: Prometheus and DCGM —
-§3.14). Before: 2026-10-07 (suite on NCP 10.4.5.10; ONES source 10.20.0.37; partial pass, sampling window,
+Created: 2026-09-29. Last updated: 2026-10-14 (BCM and Dynamo (vLLM) connectors added, six more DCGM prompts —
+§3.15). Before: 2026-10-08 (two GPU-metric connectors added: Prometheus and DCGM — §3.14); 2026-10-07 (suite on NCP 10.4.5.10; ONES source 10.20.0.37; partial pass, sampling window,
 longer timeouts, Zabbix / ONES truth fixes — §3.5, §3.10, §12).
 
 ---
@@ -19,6 +19,8 @@ an Excel matrix **and an HTML report** — the same layout as Dev's test sheet:
 `Prompt | Nexus Dashboard (Local MCP) | Catalyst Center (Local MCP) | Zabbix | ONES | Comments`.
 Since 2026-10-08 also two GPU-metric connectors, **Prometheus (Local MCP) and DCGM (API)**, with their own
 sheet `data/gpu_prompts.xlsx` (16 prompts, G01–G16) — matrix columns `Prometheus (Local MCP) | DCGM` (§3.14).
+Since 2026-10-14 also **BCM (API) and Dynamo (vLLM, API)** with the sheet `data/bcm_dynamo_prompts.xlsx` (B01–B06,
+V01–V07), and six DCGM-only rows G17–G22 in the GPU sheet — matrix columns `… | BCM | Dynamo` (§3.15).
 
 **Status (2026-10-06).** Built and self-tested: 72 offline tests pass. **Live on NCP 10.4.5.236:**
 all four connectors probed and run (§3.10). Refactored the same day (§3.13): the code is now a
@@ -31,6 +33,9 @@ NCP** (§3.10). Still open: §3.11 and §11. **Next session: start with §0.1 (t
 `NCP_MCP_Prompt_Results_20261008_141958` (ONES on 10.20.0.37): 78 PASS / 28 FAIL / 4 NA / 2 BLOCKED; two of the
 FAILs were suite misses, fixed and re-run PASS (→ 80 / 26). Three grading rules were changed by Vishakh that day
 (G08, alert charts, P17) — Dev to confirm (§11 q15). Work is on branch `feature/gpu-ai-connectors`, not merged yet.
+**2026-10-14: BCM and Dynamo (vLLM) added, plus six DCGM rows (G17–G22)** from Dev's BCM / DCGM / Dynamo sheet (§3.15;
+131 tests, 261 self-tests). All 19 new prompts PASS live on 10.4.5.10: run `…_154744` 18 PASS / 1 FAIL, then B02 was
+replaced by Dev and PASSed (`…_160646`). No full 131-test run yet. Open: §11 q16 (b).
 
 **What you need**
 - Python **3.10+** (built on 3.10.12; also run on 3.14.0) and `pip`.
@@ -38,32 +43,38 @@ FAILs were suite misses, fixed and re-run PASS (→ 80 / 26). Three grading rule
   `10.4.5.236` — set in `.env`) **and** the four
   systems: Nexus Dashboard `10.20.11.3` (https), Catalyst Center `10.4.5.230` (https),
   Zabbix `10.4.4.177:8088` (http), ONES `10.20.0.37` (https; `10.4.4.181` before 2026-10-07), and since
-  2026-10-08 Prometheus `10.20.0.41:9091` (http; the Prometheus and DCGM connectors).
+  2026-10-08 Prometheus `10.20.0.41:9091` (http; the Prometheus and DCGM connectors); since 2026-10-14 BCM
+  `10.20.13.243:8081` (https, client certificate) and the vLLM endpoints `10.4.5.33:8000` (http) and
+  `10.20.11.73:8120` (https) for Dynamo.
+- For BCM: the client-certificate PEM (certificate + key in one file, CN `ainoc-readonly`) — `bcm-client-combined.pem`
+  in this folder (git-ignored), named in `.env` `BCM_CERT`. Ask Dev if it is missing.
 - The NCP login password for user `superadmin` (`NCP_PASSWORD` — blank in `.env`; ask Dev).
 - The `#tag` of each connector as configured in NCP. On 10.4.5.10 (2026-10-07): `#nexus-mcp`,
   `#catalyst-mcp`, `#zabbix`, `#ones-37-mcp` (ONES 10.20.0.37; `#ones-mcp` there is ONES 10.4.4.181).
   Copy them exactly as the NCP UI shows them. The tag's connector and `ONES_URL` must point at the
   same ONES — check `GET /api/v1/data_connectors` (host per tag). GPU connectors (2026-10-08):
-  `#prometheus-mcp`, `#dcgm`.
+  `#prometheus-mcp`, `#dcgm`; BCM / Dynamo (2026-10-14): `#bcm`, `#dynamo-mcp`.
 
 **Steps — in this order**
 
 | # | Do | Expect |
 |---|---|---|
 | 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed (incl. `pytest-xdist`) |
-| 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, `TAG_NEXUS`, `TAG_CATALYST`, `TAG_ZABBIX`, `TAG_ONES` | — |
-| 3 | `pytest` (no arguments = offline self-tests only, no network) | `190 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
-| 4 | `pytest test_sources.py` (reads the 6 sources directly, no NCP) | 6 passed in ~10 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
-| 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 6 |
+| 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, every `TAG_*` (8), `BCM_CERT`, `DYNAMO_URL`, `DEVICE_BCM` | — |
+| 3 | `pytest` (no arguments = offline self-tests only, no network) | `261 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
+| 4 | `pytest test_sources.py` (reads the 8 sources directly, no NCP) | 8 passed in ~30 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
+| 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 8 |
 | 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result in ~20 s; NCP login and chat work |
-| 7 | Full run: `pytest test_main.py` (112 tests = 20 network prompts × 4 connectors + 16 GPU prompts × 2 (Prometheus, DCGM); the 6 connectors side by side; ~40–60 min, set by the slowest connector — ONES) | `reports/NCP_MCP_Prompt_Results_<time>.html` + `.xlsx` (same name). Open the HTML in a browser — it is rewritten after every test |
+| 7 | Full run: `pytest test_main.py` (131 tests = 20 network prompts × 4 connectors + 16 GPU prompts × 2 (Prometheus, DCGM) + G17–G22 (DCGM) + 6 BCM + 7 Dynamo; the 8 connectors side by side; ~40–60 min, set by the slowest connector — ONES) | `reports/NCP_MCP_Prompt_Results_<time>.html` + `.xlsx` (same name). Open the HTML in a browser — it is rewritten after every test |
 | 8 | Send Dev the files in §5 | — |
 
 A live run first checks `.env` and the NCP login, and stops in under a second if either is
 wrong (exit code 2, the message names the blank key — never its value).
 
 Useful variants: one connector `-k zabbix` or `--connectors zabbix,ones` · some prompts
-`--prompts P01,P07` (GPU: `G06`) · the GPU connectors only `--connectors prometheus,dcgm` · one sheet for
+`--prompts P01,P07` (GPU: `G06`, BCM: `B03`, Dynamo: `V04`) · the GPU connectors only `--connectors prometheus,dcgm` ·
+BCM, Dynamo and DCGM `--connectors bcm,dynamo,dcgm` (35 tests; today's 19 only: add
+`--prompts B01,B02,B03,B04,B05,B06,V01,V02,V03,V04,V05,V06,V07,G17,G18,G19,G20,G21,G22`) · one sheet for
 every selected connector `--excel path.xlsx` (default: each connector's own sheet) · one test at a time
 with live logs `-n 0` (use it to debug one prompt).
 
@@ -262,7 +273,7 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 |---|---|
 | `README.md` | short run instructions (same steps as §0) |
 | `docs/RUNBOOK.md` | one-page runbook for anyone running the suite: prerequisites, setup, run commands, options, results, troubleshooting |
-| `pytest.ini` | plain `pytest` = offline self-tests only; `-n 6 --dist loadgroup` (6 workers, one per connector; 4 before 2026-10-08); markers `probe`, `offline`; html report |
+| `pytest.ini` | plain `pytest` = offline self-tests only; `-n 8 --dist loadgroup` (8 workers, one per connector; 6 before 2026-10-14, 4 before 2026-10-08); markers `probe`, `offline`; html report |
 | `conftest.py` | one test per prompt × connector (each tagged `xdist_group(<connector>)`); fixtures `chat` (logs in once per worker), `source_for`, `record_result`, `record_probe` |
 | `test_main.py` | the prompt test: `run_case()` → map PASS / FAIL / NA / BLOCKED / XFAIL to pytest |
 | `test_sources.py` | probe: reads each source directly, saves `reports/snapshots/<key>.json` |
@@ -290,6 +301,7 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | `data/mcp_prompts.xlsx` | the 20 network prompts (Nexus, Catalyst, Zabbix, ONES) |
 | `data/gpu_prompts.xlsx` | (2026-10-08) the 16 GPU-metric prompts G01–G16 (Prometheus and DCGM; Dev's GPU-metrics sheet) |
 | `data/dcgm_supported_metrics.csv` | (2026-10-08) the 25 metrics the DCGM connector supports (Vishakh) — DCGM's truth for G01 / G02 |
+| `ncp_suite/truth/bcm.py`, `truth/dynamo.py`, `grading/bcm_dynamo.py`, `data/bcm_dynamo_prompts.xlsx`, `selftest/test_bcm_dynamo.py` | (2026-10-14) BCM and Dynamo — §3.15 |
 | `selftest/test_offline.py` | 107 offline tests (72 before 2026-10-07; added: chart data from the tool call, threshold context values, text bar chart, problem-count column, agent_trace kept + masked, repeat of a FAIL (flaky), LLM reader rescue + JSON→table, report trace / reader columns, devices listed under an "Unhealthy" heading, inventory window, health that changed during the answer, "Platform" is not a model column, "could you narrow the request?" follow-up, placeholder row, numbered-list values, missing column, platform fallback, source's own faulty status, read before the prompt, "give me the IP" follow-up, partial pass on / off, wrong data still fails under partial pass, cut-off answer graded, timestamps / units in P09, "wasn’t able to" wording, sampling window + temperature alternatives, unique device pick, "which one?" follow-up with the IP, cut-off answer not repeated, Zabbix value maps / memory pool / offEnvPower). Before that: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
 | `selftest/test_gpu_connectors.py` | (2026-10-08) 82 offline tests: every GPU check with an answer that must PASS (or NA) and one that must FAIL, on fake Prometheus / DCGM sources; chart tool call in agent_trace; DCGM supported list; source view; each connector's own sheet; "—" in the matrix |
 | `AI-NOC-Prompt-Validation-Use-Cases.xlsx` | plan for the next phase (10 AI NOC use cases, §7) — not built yet |
@@ -1016,6 +1028,85 @@ grading was not touched. GPU FAILs, each read against NCP's answer and agent_tra
 Live checks of today's fixes: dcgm-G10 (GPU column), prometheus-G16 (empty chart call), prometheus-G05 (sentence
 numbers) PASS; dcgm-G05, dcgm-G14 flaky (passed on the repeat).
 
+### 3.15 BCM and Dynamo (vLLM), and six more DCGM rows (added 2026-10-14)
+
+Dev's request (2026-10-14): his sheet `Prompts | Connector | Status | Comments` — 6 BCM, 7 DCGM, 7 Dynamo prompts,
+word for word (B02 later replaced by Dev, below). Same seams as §3.14 (registry row, truth class, checks module, sheet). Probed read-only on 2026-10-14.
+
+**NCP connectors (10.4.5.10, `GET /api/v1/data_connectors`):** id 43 `#bcm` → `host https://10.20.13.243:8081/` +
+`cert_pem` (API) · id 45 `#dynamo-mcp` → `vllm_metrics_urls` http://10.4.5.33:8000/metrics, https://10.20.11.73:8120/metrics
+(API) · id 41 `#dcgm` → `prometheus_endpoint http://10.20.0.41:9091` (= `DCGM_URL`, verified, unchanged).
+
+**Truth.** `truth/bcm.py`: BCM 11.0 REST `/rest/v1/{status, device, monitoring/latest}` with the client-certificate
+PEM (`BCM_CERT`, no login); `raw` values only (§8); a node's NICs = its `<metric>:<nic>` measurables (bcm-head: ens34,
+ens37, as LLDP shows); Slurm jobs are at `/workload/job-status` (not used since B02 was replaced);
+`/workload/node-status` is 401 for this cert.
+`truth/dynamo.py`: each vLLM `/metrics` page (text format, parsed in the module); endpoint = its host; since-start
+values (§8 formulas); TTFT percentiles from the histogram with the bucket bounds; alternatives kept as their own kinds.
+Seen: BCM 41 devices, Nodes 36 / 1 / 35 / 0 (+ LiteNodes 4 / 3 / 1 / 0), no Slurm jobs, drops only on hgx-su00-v100's
+virtual gns3tap NICs. Dynamo: both endpoints serve gpt-oss-120b; 10.4.5.33 mean TTFT ~19.5 s (p90 bucket 10–20 s),
+10.20.11.73 ~70 ms (p99 bucket 250–500 ms).
+
+| ID | Prompt | Check | Passes when |
+|---|---|---|---|
+| B01 | Show node status for all nodes. | health_summary (network check) | every node covered (partial), every DOWN one flagged |
+| B02 | show me the network interfaces for `<DEVICE>` (= bcm-head, `DEVICE_BCM`) | interfaces_list (network check) | every NIC BCM monitors on the node named (ens34, ens37); partial pass. Replaced "Show job status and allocations." (Dev, 2026-10-14) |
+| B03 | How many nodes … total, up, down and closed? | node_counts | each count = Nodes* counters, or Nodes* + LiteNodes*, or every device of /status (one set for all; the last one Dev, 2026-10-14) |
+| B04 | What is the CPU utilization per node? | cpu_all (network check) | CPUUsage × 100 per node ±CPU_TOL |
+| B05 | Which node is under the most memory pressure? | node_mem_top | first node named is the top MemoryUtilization (±MEM_TOL) |
+| B06 | Are there packet errors or drops on the compute nodes? | nic_errors | physical-NIC errors flagged; a clean node flagged = FAIL; virtual-NIC drops may be named |
+| G17 | Show GPU utilization. | gpu_util | per GPU ±GPU_UTIL_TOL |
+| — | List all the GPU metrics. | = G02 | not added again |
+| G18 | List every GPU with its host and card model. | gpu_inventory | every GPU with its model (short form counts); another model = FAIL |
+| G19 | Which GPU is running hottest right now? | gpu_hottest | as G10 |
+| G20 | Show framebuffer memory used, free and reserved for each GPU. | gpu_framebuffer | MiB per GPU ±FB_TOL % (10) |
+| G21 | Show XID errors for all GPUs over the last 7 days. | gpu_xid (Param 168) | max_over_time per GPU; none in the window: NCP says so; hgx-su00-v100 (no series) not graded |
+| G22 | Are any GPUs currently clock throttled? | throttling | as G08 |
+| V01 | Show inference throughput and latency (TTFT, ITL) for `<MODEL>`. | vllm_latency (Tol 10 %) | mean TTFT / ITL (or TPOT) per endpoint or model (weighted by requests, or the plain mean of the endpoints — Dev, 2026-10-14); throughput not compared |
+| V02 | Show KV-cache hit rate for `<MODEL>`. | kv_hit_rate (Tol 2) | prefix-cache hits / queries per endpoint or model |
+| V03 | Which vLLM endpoint has the worst TTFT? | ttft_worst (Tol 10 %) | first endpoint named is the worst by mean / p95 / p99 |
+| V04 | TTFT p50 / p90 / p95 / p99 per endpoint + latency SLA | ttft_percentiles (Tol 10 %) | each inside its bucket; SLA verdict (< 500 ms) right where unambiguous |
+| V05 | Running and waiting requests per endpoint | vllm_requests (Tol 1) | between the reads ±1 |
+| V06 | Success rate per endpoint; 4xx / 5xx | vllm_success (Tol 0.5) | success % (3 definitions), 4xx / 5xx (all handlers or chat) |
+| V07 | KV cache % in use per endpoint; total slots | kv_usage (Tol 2) | in use ±2 points; slots = blocks or tokens ±1 % |
+
+Rules Dev accepted (2026-10-14): B03 also counts every device of /status; V01 also takes the plain mean of the endpoint
+means; follow-up questions match curly apostrophes. Still to confirm (§11 q16 b): Dynamo values must lie between the
+lowest and highest read of the window (vLLM keeps no history); the SLA is NCP's policy band TTFT < 500 ms (also the
+suite's fixed reply when NCP asks for it); throughput is not compared. `<MODEL>` is filled like
+`<DEVICE>` (`DEVICE_DYNAMO` overrides). `pytest.ini` now `-n 8`. Network and the 16 earlier GPU checks unchanged.
+
+**Smoke run 2026-10-14 (`…_151125`, one prompt per connector):** dcgm-G20 PASS (32 values). bcm-B03 FAIL — NCP counted
+all 41 devices (incl. the switch) as nodes; its tool relayed faithfully; §11 q16. dynamo-V04: NCP asked for the SLA
+(conv 1645 / 1647) — the suite now answers "TTFT SLA of 500 ms" (`chat/policy.py`); then NCP's table was right
+(conv 1648) but written "14 706 ms" (U+202F thousands) — suite miss, fixed; the saved answer re-graded PASS. All 19
+new prompts were run later (below).
+
+**Run of today's 19 new prompts (2026-10-14 15:30, 7 min 26 s, `NCP_MCP_Prompt_Results_20261014_153015`):** 15 PASS
+(B04, V06 partial; G19 flaky), 4 FAIL, each read against NCP's answer and agent_trace:
+- **dcgm-G22** (1669, 1672) — **NCP**: "Yes – a few GPUs are clock-throttled" from SM clocks of 180 / 210 MHz (idle clocks);
+  no throttle series exists — a guessed status (same rule as G08).
+- **dynamo-V01** (1651, 1654) — per-endpoint TTFT / ITL right; NCP's "fleet-wide" Avg TTFT 9 755 ms / ITL 12.9 ms is the
+  plain mean of the two endpoint means; the per-request fleet mean is 17 560 ms / 18.1 ms (10.4.5.33 serves most
+  requests). Dev to decide whether a mean of endpoint means is accepted (§11 q16).
+- **bcm-B03** (1656, 1659) — 41 devices counted as nodes (§11 q16a). NCP's first `get_bcm_device_status` call failed:
+  "unexpected keyword argument ' _exportable'" (NCP tool bug; retried OK).
+- **bcm-B02** (1653, 1655) — **suite gap**: NCP asked "Could you tell me which compute host(s) or job-scheduler you’d like…?"
+  and fetched no jobs; `is_followup` missed it ("could you tell me" is not a phrase; "you’d" curly — §11 q16c), so no
+  reply was sent and the question was graded as the answer.
+
+**Re-run after Dev's answers (2026-10-14 15:47, 8 min 5 s, `NCP_MCP_Prompt_Results_20261014_154744`): 18 PASS, 1 FAIL.**
+B03, V01 PASS with the new rules; G22 PASS this time (NCP gave per-GPU values, graded at its tool-call times — the run
+before it guessed "throttled" from idle SM clocks); G20 flaky; B04, V06, G22 partial. **bcm-B02** (1677, 1681) — the
+follow-up now works (suite: "go ahead for all devices"), then **NCP**: "The BCM connector only provides inventory and
+host-level health data … does not expose job-scheduler information" — BCM's REST API has it (`/workload/job-status`,
+0 Slurm jobs now), so FAIL ("not available" while the source has the data). NCP's BCM connector has no workload tool
+(Layer 2). One NCP tool call also failed: "query_bcm: Failed to parse JSON arguments: Unterminated string".
+
+**B02 replaced (Dev, 2026-10-14):** "Show job status and allocations." → "show me the network interfaces for bcm-head"
+(sheet `<DEVICE>`, `DEVICE_BCM=bcm-head`; network check `interfaces_list`). Run `…_160646` (conv 1694): PASS — NCP
+listed ens34 and ens37 with their byte / packet / drop / error rates (rates not graded).
+
 ---
 
 ## 4. First live run — what can go wrong and what to do
@@ -1451,7 +1542,8 @@ The first live run (§0 steps 4–6) answers 6 and helps with 7.
 12. Threshold prompts (P11 / P12) PASS when NCP has no data at all, as long as no source device is
     above the threshold (nexus-P11 / P12, 2026-10-06). Should a "could not retrieve" answer FAIL these
     checks, as it does for the other checks? Related to q8. Not changed (rule 12).
-13. GPU (§3.14): `pytest.ini` runs `-n 6` now (one worker per connector, up to 6 chats at once on 10.4.5.10).
+13. GPU (§3.14): `pytest.ini` runs `-n 6` now (one worker per connector, up to 6 chats at once on 10.4.5.10; `-n 8`
+    since 2026-10-14, §3.15).
     Fine (see q9)? And G01 / G02 do not grade the metric count NCP states — should they?
 14. GPU G09 (ECC): NCP shows the row-remap metrics as "ECC error counters … all zero". Your note allows remapped
     rows "if labelled as such" — the metric names are shown, but the claim is about ECC. FAIL (as coded) or NA?
@@ -1461,6 +1553,17 @@ The first live run (§0 steps 4–6) answers 6 and helps with 7.
     (partial PASS), not a FAIL. Agree?
 
 ---
+16. BCM / Dynamo (§3.15, 2026-10-14): (a) B03 — NCP's BCM tool counts every device of `/status` and NCP calls them
+    nodes: "41 nodes, 4 UP, 37 DOWN, 0 CLOSED" (conv 1642 / 1645) — that includes the switch `sonic-sw01`. The check
+    accepts BCM's node counters (36 / 1 / 35 / 0) or nodes + lite nodes (40 / 4 / 36 / 0), so it FAILs. Accept the
+    device count too (a third set in `BcmSource.node_counts`), or keep FAIL? (b) Confirm the new rules: Dynamo values
+    between the lowest and highest read; SLA = TTFT < 500 ms (also the suite's fixed reply when NCP asks for the SLA);
+    throughput not compared; `-n 8` (8 chats at once). (c) NCP's chat text uses a curly apostrophe ("you’d like"),
+    which `is_followup` does not match (it matches "you'd like") — a gap for every connector, left unchanged.
+    **Answered 2026-10-14 (Dev):** (a) accept the device count — done; the plain mean of the endpoint means counts
+    for dynamo-V01 — done; (c) fix it — done (`is_followup` matches curly apostrophes, "could you tell me" added).
+    B02's job prompt was replaced by "show me the network interfaces for bcm-head" (NCP's BCM connector has no job
+    tool). (b) not answered yet.
 
 ## 12. Change log
 
@@ -1711,3 +1814,26 @@ Add one line per change: date, who, what, why.
   next prompt's report "Source" panel; normal-path order unchanged). `truth/base.py` `Source._grab()`: the probe
   snapshot helper, once (was copied in `truth/prometheus.py`; same output, checked on fake sources).
   `prompts.PromptRow.notes` removed (loaded, never read; the sheet's Notes column stays). Self-tests 190 pass.
+- **2026-10-14 (Dev + Claude)** — BCM and Dynamo connectors and six DCGM rows from Dev's sheet (§3.15). New:
+  `truth/bcm.py`, `truth/dynamo.py`, `grading/bcm_dynamo.py` (11 checks; B01 / B04 use `health_summary` / `cpu_all`),
+  `data/bcm_dynamo_prompts.xlsx` (B01–B06, V01–V07), `selftest/test_bcm_dynamo.py`. Changed: `settings.py` (2 registry
+  rows, `FB_TOL`, sheet path), `grading/gpu.py` (+ gpu_util, gpu_inventory, gpu_framebuffer, gpu_xid; `fb` relative
+  tolerance), `grading/__init__.py`, `truth/prometheus.py` (views for G20 / G21), `runner.py` (`<MODEL>`),
+  `data/gpu_prompts.xlsx` (G17–G22, dcgm only), `pytest.ini` (`-n 8`), `.env` / `.env.example` (`TAG_BCM`, `BCM_URL`,
+  `BCM_CERT`, `TAG_DYNAMO`, `DYNAMO_URL`, `DEVICE_DYNAMO`, `FB_TOL`), 3 tests in `test_offline.py` /
+  `test_gpu_connectors.py` (counts), README, RUNBOOK. Existing grading unchanged. Probe
+  `pytest test_sources.py --connectors bcm,dynamo,dcgm`: 3 passed. After the smoke run: `chat/policy.py` — an SLA
+  question (`\bsla\b`, ends with "?") is a follow-up, answered "TTFT SLA of 500 ms" (other questions unchanged);
+  `bcm_dynamo._numbers` reads "14 706 ms". Self-tests 190 → 262. Open: §11 q16.
+- **2026-10-14 afternoon (Dev + Claude)** — Dev's answers to §11 q16 after the run `…_153015`: `truth/bcm.py`
+  `node_counts` — every device of /status is a third accepted count (bcm-B03, NCP: 41 / 4 / 37 / 0);
+  `grading/bcm_dynamo.py` — the plain mean of the endpoint means is accepted for the model as a whole (dynamo-V01,
+  NCP: "fleet-wide" 9 755 ms = (19 440 + 70.1) / 2); `chat/policy.py` `is_followup` — phrases match on the text with
+  curly apostrophes / hyphens made plain ("you’d like"), and "could you tell me" is a follow-up phrase (bcm-B02, conv
+  1655). The policy change applies to every connector. Sheet notes of B03 / V01 updated. Self-tests 262 → 266.
+- **2026-10-14 evening (Dev + Claude)** — B02 replaced (Dev): "Show job status and allocations." → "show me the network
+  interfaces for bcm-head" (sheet: `<DEVICE>`, `DEVICE_BCM=bcm-head` in `.env` / `.env.example`), graded by the network
+  check `interfaces_list`. `truth/bcm.py`: `_interfaces` = the NICs of a node from the `<metric>:<nic>` measurables of
+  /monitoring/latest (no oper status: InterfaceState 0 / 1 not confirmed); the job reader and the `bcm_jobs` check removed
+  (10 BCM / Dynamo checks left; the Slurm list is at /rest/v1/workload/job-status if NCP gets a job tool). Self-tests
+  266 → 261. Live: probe `<DEVICE>` = bcm-head, 2 interfaces; bcm-B02 PASS (`…_160646`, conv 1694: ens34, ens37).

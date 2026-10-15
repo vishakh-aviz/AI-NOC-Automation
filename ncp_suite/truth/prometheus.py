@@ -185,6 +185,9 @@ class PrometheusSource(Source):
             found = self.has_series(*THROTTLE_SERIES) if check == "throttling" else self.has_series(prefix=ECC_PREFIX)
             return f"Series in Prometheus: {', '.join(found)}" if found else \
                 f"No {'throttling' if check == 'throttling' else 'ECC'} series in Prometheus."
+        if check == "gpu_xid":
+            peak = self.over_time("max", "xid", param or 168)
+            return ["GPU", "Model", f"Max XID ({param or 168:g} h)"], [[g.name, g.model, _fmt(peak.get(g.key))] for g in self.gpus()]
         windows = {"gpu_util_chart": (("util",), 1), "power_temp_window": (("temp", "power"), 24),
                    "gpu_util_avg": (("util",), 168)}
         if check in windows:
@@ -195,6 +198,8 @@ class PrometheusSource(Source):
                      for g in self.gpus()])
         cur = self.current()
         cols = (("util", "Util %"), ("temp", "Temp °C"), ("power", "Power W"), ("mem_pct", "Mem used %"), ("xid", "XID"))
+        if check == "gpu_framebuffer":
+            cols = (("fb_used", "FB used MiB"), ("fb_free", "FB free MiB"), ("fb_reserved", "FB reserved MiB"))
         return (["GPU", "Model"] + [c for _, c in cols],
                 [[g.name, g.model] + [_fmt(cur.get(g.key, {}).get(k)) for k, _ in cols] for g in self.gpus()])
 
