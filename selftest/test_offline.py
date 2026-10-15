@@ -153,8 +153,8 @@ def run(check, answer, src=None, has_image=None):
 
 
 def test_every_check_has_a_good_and_bad_sample():
-    from ncp_suite.grading import gpu                       # GPU checks: samples in test_gpu_connectors.py
-    assert set(GOOD) == set(CHECKS) - set(gpu.CHECKS) == set(BAD)
+    from ncp_suite.grading import bcm_dynamo, gpu           # their samples: test_gpu_connectors.py, test_bcm_dynamo.py
+    assert set(GOOD) == set(CHECKS) - set(gpu.CHECKS) - set(bcm_dynamo.CHECKS) == set(BAD)
 
 
 @pytest.mark.parametrize("check", sorted(GOOD))
@@ -827,7 +827,7 @@ def test_connectors_are_built_from_env_keys_by_name(monkeypatch):
                                                              "ncp_suite.truth.demo:DemoSource", {"site": "lab"})
     assert [c.title for c in settings.CONNECTORS.values()] == ["Nexus Dashboard (Local MCP)",
                                                                "Catalyst Center (Local MCP)", "Zabbix", "ONES",
-                                                               "Prometheus (Local MCP)", "DCGM"]
+                                                               "Prometheus (Local MCP)", "DCGM", "BCM", "Dynamo"]
 
 
 def test_missing_names_blank_keys_never_values():

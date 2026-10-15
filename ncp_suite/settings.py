@@ -22,6 +22,7 @@ REPORT_DIR = ROOT / "reports"
 PROMPTS_XLSX = ROOT / "data" / "mcp_prompts.xlsx"           # the network connectors' sheet
 GPU_PROMPTS_XLSX = ROOT / "data" / "gpu_prompts.xlsx"       # Prometheus and DCGM (Dev's GPU-metrics sheet)
 DCGM_SUPPORTED = ROOT / "data" / "dcgm_supported_metrics.csv"   # the metrics the DCGM connector supports
+BCM_DYNAMO_PROMPTS_XLSX = ROOT / "data" / "bcm_dynamo_prompts.xlsx"   # BCM and Dynamo (Dev's sheet, 2026-10-14)
 
 
 def _load_env(path: Path) -> None:
@@ -91,6 +92,7 @@ TOLERANCE = {
     "temp": env_float("TEMP_TOL", 3),
     "util": env_float("GPU_UTIL_TOL", 10),      # GPU utilization, points
     "power": env_float("POWER_TOL", 10),        # GPU power draw, % of the source value
+    "fb": env_float("FB_TOL", 10),              # GPU framebuffer MiB, % of the source value (GB / GiB rounding)
 }
 # Dev, 2026-10-07: "if a bit of data is given and it matches the source, pass it". On: a list
 # answer that shows only part of the data PASSES when everything it shows is right (the reason
@@ -146,6 +148,9 @@ REGISTRY = (
     # GPU metrics (2026-10-08): both read the Prometheus the DCGM exporters feed (truth/prometheus.py)
     ("prometheus", "Prometheus (Local MCP)",      "prometheus:PrometheusSource", {},                                          GPU_PROMPTS_XLSX, False),
     ("dcgm",       "DCGM",                        "prometheus:DcgmSource",       {},                                          GPU_PROMPTS_XLSX, False),
+    # 2026-10-14: BCM (client-certificate PEM, no login) and Dynamo (DYNAMO_URL = the vLLM /metrics URLs, comma list)
+    ("bcm",        "BCM",                         "bcm:BcmSource",               {"cert": ("BCM_CERT", "")},                  BCM_DYNAMO_PROMPTS_XLSX, False),
+    ("dynamo",     "Dynamo",                      "dynamo:DynamoSource",         {},                                          BCM_DYNAMO_PROMPTS_XLSX, False),
 )
 
 

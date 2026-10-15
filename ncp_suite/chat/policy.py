@@ -24,7 +24,7 @@ FOLLOWUP_PHRASES = (
     "could you let me know", "could you please specify", "could you specify", "could you provide",
     "could you clarify", "could you confirm", "could you share", "which device", "which hostname",
     "which specific", "please specify", "please provide", "please let me know", "can you specify",
-    "can you tell me", "can you provide", "do you want", "would you like", "you'd like", "which one",
+    "can you tell me", "could you tell me", "can you provide", "do you want", "would you like", "you'd like", "which one",
     "what specific", "let me know which", "let me know if you", "i need more information",
     "i need to know", "just let me know", "what is the hostname", "what is the ip", "what device",
     "for which device", "for which hostname", "proceed using", "data source", "specific data source",
@@ -50,6 +50,9 @@ INTERFACE_QUESTION = ("which interface", "which port", "specific interface", "in
 DEVICE_QUESTION = ("which device", "which hostname", "what device", "for which device", "specific device",
                    "device name", "which switch", "which one", "what is the ip")
 TIME_QUESTION = ("time range", "time window", "timeframe", "time frame", "how far back", "period")
+# dynamo-V04 (conv 1645, 2026-10-14): "which latency SLA should I apply?" — NCP's own policy band, TTFT < 500 ms
+# (CLAUDE.md §8; the same 500 ms as grading/bcm_dynamo.SLA_MS)
+SLA_QUESTION = re.compile(r"\bslas?\b|target latency|latency target")
 # CHANGED 2026-10-07: NCP asks "which one?" WITH a small table of candidates (ONES: two `Leaf-1`,
 # ones-P09 / P13 / P14 / P15 on 10.4.5.10). Such a question is a follow-up although it has a table.
 DISAMBIGUATION = ("which one would you like", "which one should", "which one do you",
@@ -74,7 +77,7 @@ def _norm(text: str) -> str:
 
 def is_followup(text: str) -> bool:
     t = (text or "").strip()
-    lowered = t.lower()
+    lowered = _norm(t)                                      # "you’d like" = "you'd like" (bcm-B02 conv 1655)
     small_table = sum(1 for ln in t.splitlines() if ln.lstrip().startswith("|")) <= 8
     # "... Which one would you like? Please specify the IP address." — the "?" is near the end
     if any(p in _norm(t) for p in DISAMBIGUATION) and small_table and "?" in lowered[-300:]:
@@ -89,6 +92,8 @@ def is_followup(text: str) -> bool:
         return False
     if any(p in lowered for p in NO_DATA_PHRASES):          # DC-INVENTORY: definite "no data" is final
         return False
+    if SLA_QUESTION.search(lowered) and lowered.rstrip().endswith("?"):
+        return True                                         # "What TTFT threshold should I use for the SLA?" (conv 1647)
     hits = sum(p in lowered for p in FOLLOWUP_PHRASES)
     return (hits >= 1 and lowered.rstrip().endswith("?")) or hits >= 2
 
@@ -105,6 +110,8 @@ def followup_reply(question: str, ctx: dict) -> str:
                 f"Yes, all devices in {title}, please. One call per device is fine.")
     elif any(p in _norm(question) for p in DISAMBIGUATION) and device:
         body = f"Device {who}."
+    elif SLA_QUESTION.search(q):
+        body = "Use a TTFT SLA of 500 ms: an endpoint meets it when its TTFT is below 500 ms."
     elif any(p in q for p in TOOL_QUESTION):
         body = f"Use the {title} connector for this."
     elif any(p in q for p in INTERFACE_QUESTION):

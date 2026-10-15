@@ -27,7 +27,8 @@ from ncp_suite import settings
 from ncp_suite.grading.checks import Ctx, Verdict, _fail, _ok, _partial, _show, cap
 from ncp_suite.grading.compare import (has_bad_word, has_chart, low, mentions, parse_tables, row_text, says_none,
                                        says_not_available)
-from ncp_suite.truth.prometheus import ECC_PREFIX, THROTTLE_SERIES, Gpu
+from ncp_suite.truth.base import NoTruth
+from ncp_suite.truth.prometheus import ECC_PREFIX, SERIES, THROTTLE_SERIES, Gpu
 
 NOT_EXPORTED = re.compile(r"not (?:being )?exported|isn't exported|no (?:\w+ ){0,3}(?:metric|series|counter)s? (?:is |are )?"
                           r"(?:available|exported|present|collected|exposed|found)|not present|no such metric|"
@@ -246,7 +247,7 @@ def _per_gpu(ctx: Ctx, specs: list[tuple[str, tuple[str, ...], str, str, str]], 
     accepted values]}."""
     gpus = ctx.src.gpus()
     samples = samples or {kind: ctx.src.metric_samples(kind) for kind, *_ in specs}
-    rel = {"power"}
+    rel = {"power", "fb"}
     exp = "; ".join(f"{label} (±{_tol(ctx, tk):g}{'%' if tk in rel else ''}): "
                     + cap(f"{g.name}={_show(samples[kind].get(g.key, []))}" for g in gpus if g.key in samples[kind])
                     for kind, _, _, tk, label in specs)
@@ -280,11 +281,61 @@ def gpu_temp_power(ctx: Ctx) -> Verdict:
                           ("power", ("power", "draw", "watt"), "w", "power", "power W")])
 
 
+def gpu_util(ctx: Ctx) -> Verdict:
+    """'Show GPU utilization.' Each GPU ±GPU_UTIL_TOL of a read taken while NCP answered."""
+    return _per_gpu(ctx, [("util", ("util", "usage"), "%", "util", "utilization %")])
+
+
+def gpu_framebuffer(ctx: Ctx) -> Verdict:
+    """'Show framebuffer memory used, free and reserved for each GPU.' MiB (GiB / GB × 1024), ±FB_TOL % of the source."""
+    return _per_gpu(ctx, [(f"fb_{w}", (w[:6],), "mib", "fb", f"FB {w} MiB") for w in ("used", "free", "reserved")])
+
+
 def gpu_mem_util(ctx: Ctx) -> Verdict:
     """Memory used % = FB used / (used + free + reserved), ±MEM_TOL. MEM_COPY_UTIL (bandwidth busy %) counts
     only when the answer says that is what it shows (Dev's note)."""
     alt = {"mem_pct": ctx.src.metric_samples("copy_util")} if re.search(r"copy|bandwidth", low(ctx.answer)) else None
     return _per_gpu(ctx, [("mem_pct", ("memory", "mem", "util", "used"), "%", "mem", "memory used %")], alt)
+
+
+def _model_key(model: str) -> str:
+    """The part of a model name NCP keeps: 'NVIDIA RTX A6000' -> 'a6000', 'Tesla V100-SXM2-16GB' -> 'v100',
+    'NVIDIA RTX PRO 6000 Blackwell Server Edition' -> 'pro6000'."""
+    words = [w for w in re.split(r"[\s\-]+", low(model)) if w]
+    while len(words) > 1 and words[0] in ("nvidia", "tesla", "geforce", "quadro", "rtx"):
+        words.pop(0)
+    end = next((i for i, w in enumerate(words) if re.search(r"\d", w)), len(words) - 1)
+    return "".join(words[:end + 1])
+
+
+def gpu_inventory(ctx: Ctx) -> Verdict:
+    """'List every GPU with its host and card model.' Every GPU (host + index) named with its model — the short form
+    counts (A6000, V100, PRO 6000); another GPU's model in its row / clause = FAIL. Partial pass."""
+    gpus = ctx.src.gpus()
+    keys = {g.model: _model_key(g.model) for g in gpus if g.model}
+    squash = lambda t: re.sub(r"[\s\-_]", "", low(t))
+    exp = f"{len(gpus)} GPUs: " + cap(f"{g.name} ({g.model})" for g in gpus)
+    wrong, missing, shown = [], [], 0
+    for g in gpus:
+        t = squash(" ".join(gpu_named(ctx.answer, g, gpus)))
+        for n in {n for x in gpus for n in host_names(x)}:          # host names hold model-like tokens (hgx-su00-a6000)
+            t = t.replace(squash(n), " ")
+        own = keys.get(g.model, "")
+        if own and own in t:
+            shown += 1
+        elif other := [m for m, k in keys.items() if k != own and k in t and k not in own]:
+            wrong.append(f"{g.name}: {other[0]} (source {g.model})")
+        else:
+            missing.append(g.name)
+    if wrong:
+        return _fail(ctx, f"wrong model: {cap(wrong, 4)}", exp)
+    if not shown:
+        return _fail(ctx, f"no GPU listed with its model ({len(gpus)} expected)", exp)
+    if missing and settings.PARTIAL_PASS:
+        return _partial(f"{shown} of {len(gpus)} GPUs listed with the right model", missing, exp)
+    if missing:
+        return _fail(ctx, f"not listed with a model: {cap(missing)}", exp)
+    return _ok(f"all {len(gpus)} GPUs listed with the right model", exp)
 
 
 # ---- ranking -------------------------------------------------------------------------------------
@@ -612,6 +663,47 @@ def throttling(ctx: Ctx) -> Verdict:
     return _fail(ctx, f"throttled GPUs not named: {cap(missing)}", exp) if missing else _ok("all throttled GPUs named", exp)
 
 
+NO_XID = re.compile(r"\bno\b[^.\n]{0,40}\bxid|\bxid\b[^.\n]{0,40}\b(?:0|zero|none)\b|\b(?:0|zero) xid")
+
+
+def gpu_xid(ctx: Ctx) -> Verdict:
+    """'Show XID errors for all GPUs over the last N days' (Param = hours, 168). max_over_time of the XID series per
+    GPU: every GPU with an XID in the window named with a non-zero value, no XID claimed for a GPU at 0, "no XID
+    errors" when none. GPUs without an XID series (hgx-su00-v100) are not graded (missing = no data, CLAUDE.md §8)."""
+    hours = ctx.row.param or 168
+    peak = ctx.src.over_time("max", "xid", hours)
+    gpus = ctx.src.gpus()
+    graded = [g for g in gpus if g.key in peak]
+    if not graded:
+        raise NoTruth(f"{ctx.src.title}: no {SERIES['xid']} series over {hours:g} h")
+    bad = [g for g in graded if peak[g.key] > 0]
+    exp = f"XID over {hours:g} h: " + (cap(f"{g.name} (XID {peak[g.key]:g})" for g in bad) or
+                                       f"none on the {len(graded)} GPUs with an XID series")
+
+    def claims(g: Gpu) -> bool:
+        """A non-zero XID column, or a clause about this GPU with 'XID' and a non-zero number (its index left out)."""
+        got = gpu_value(ctx.answer, g, gpus, ("xid", "error"), "")[0]
+        if got is not None:
+            return got > 0
+        clauses = (low(INDEX.sub(" ", _without_host(c, g))) for c in gpu_clauses(ctx.answer, g, gpus))
+        return any("xid" in t and not re.search(r"\bno\b|\bzero\b|\bnone\b", t) and any(v > 0 for _, v, _ in quantities(t))
+                   for t in clauses)
+    claimed = {g for g in graded if claims(g)}
+    if wrong := [g.name for g in claimed if g not in bad]:
+        return _fail(ctx, f"XID claimed on GPUs with none in the window: {cap(wrong)}", exp)
+    if missing := [g.name for g in bad if g not in claimed]:
+        if settings.PARTIAL_PASS and len(missing) < len(bad):
+            return _partial(f"{len(bad) - len(missing)} of {len(bad)} GPUs with an XID named", missing, exp)
+        return _fail(ctx, f"GPUs with an XID not named: {cap(missing)}", exp)
+    if bad:
+        return _ok(f"all {len(bad)} GPUs with an XID named", exp)
+    if _unavailable(ctx.answer) and not NO_XID.search(low(ctx.answer)):
+        return _fail(ctx, "the source has the XID series; NCP said the data is not available", exp)
+    if NO_XID.search(low(ctx.answer)) or says_none(ctx.answer) or parse_tables(ctx.answer):
+        return _ok(f"no XID in the window on the {len(graded)} GPUs with an XID series; NCP agreed", exp)
+    return _fail(ctx, "no XID in the window, NCP did not say so", exp)
+
+
 def ecc(ctx: Ctx) -> Verdict:
     """No ECC series in this lab: NCP must say so (it may show remapped rows / XID when it labels them so)."""
     names = ctx.src.has_series(prefix=ECC_PREFIX)
@@ -726,6 +818,8 @@ def gpu_fleet_health(ctx: Ctx) -> Verdict:
 CHECKS = {f.__name__: f for f in (
     metric_catalog, gpu_metric_names, gpu_util_chart, power_temp_window, gpu_temp_power, gpu_mem_util, throttling,
     ecc, gpu_hottest, gpu_rank_util, gpu_idle, alerts_by_severity, gpu_fleet_health, gpu_util_avg, alerts_chart,
+    gpu_util, gpu_inventory, gpu_framebuffer, gpu_xid,                     # DCGM rows G17–G22 (2026-10-14)
 )}
 # current values: sampled while NCP answers (runner.py), compared with every read
-METRIC_CHECKS = {"gpu_temp_power", "gpu_mem_util", "gpu_hottest", "gpu_rank_util", "gpu_idle", "gpu_fleet_health"}
+METRIC_CHECKS = {"gpu_temp_power", "gpu_mem_util", "gpu_hottest", "gpu_rank_util", "gpu_idle", "gpu_fleet_health",
+                 "gpu_util", "gpu_framebuffer"}

@@ -22,12 +22,15 @@ def T(header, *rows):
 GPUS = [Gpu("hgx-a", "0", "NVIDIA RTX A6000", "GPU-a0", "hgx-a", "10.0.0.1"),
         Gpu("hgx-a", "1", "NVIDIA RTX A6000", "GPU-a1", "hgx-a", "10.0.0.1"),
         Gpu("hgx-b", "0", "Tesla V100-SXM2-16GB", "GPU-b0", "10.0.0.9:9400", "10.0.0.9")]
-NOW = {"hgx-a:0": {"util": 0, "temp": 40, "power": 100, "mem_pct": 10.0, "copy_util": 0, "xid": 0},
-       "hgx-a:1": {"util": 95, "temp": 90, "power": 300, "mem_pct": 90.0, "copy_util": 40, "xid": 0},
+NOW = {"hgx-a:0": {"util": 0, "temp": 40, "power": 100, "mem_pct": 10.0, "copy_util": 0, "xid": 0,
+                   "fb_used": 4800, "fb_free": 43000, "fb_reserved": 500},
+       "hgx-a:1": {"util": 95, "temp": 90, "power": 300, "mem_pct": 90.0, "copy_util": 40, "xid": 0,
+                   "fb_used": 43500, "fb_free": 4300, "fb_reserved": 500},
        "hgx-b:0": {"util": 3, "temp": 50, "power": 60, "mem_pct": 0.0, "copy_util": 0}}
 OVER = {("avg", "util"): [2, 80, 1], ("max", "util"): [5, 100, 3], ("min", "util"): [0, 60, 0],
         ("avg", "temp"): [40, 85, 50], ("max", "temp"): [45, 95, 52], ("min", "temp"): [35, 80, 48],
-        ("avg", "power"): [100, 280, 50], ("max", "power"): [120, 310, 55], ("min", "power"): [90, 250, 45]}
+        ("avg", "power"): [100, 280, 50], ("max", "power"): [120, 310, 55], ("min", "power"): [90, 250, 45],
+        ("max", "xid"): [0, 79, None]}                    # hgx-b has no XID series (as hgx-su00-v100)
 NAMES = ["DCGM_FI_DEV_GPU_TEMP", "DCGM_FI_DEV_GPU_UTIL", "DCGM_FI_DEV_POWER_USAGE", "DCGM_FI_PROF_NVLINK_RX_BYTES",
          "node_cpu_seconds_total", "vllm:num_requests_running", "up"]
 
@@ -180,8 +183,23 @@ CASES = [
     ("gpu_util_avg", P, "Most GPUs were idle. 10.0.0.1 averaged ≈ 78 % utilization, 10.0.0.9 about 1 %. "
                         "![](ui://line-chart-1)", "FAIL"),
     ("gpu_util_avg", P, "10.0.0.1 averaged ≈ 41 % utilization over the week, 10.0.0.9 about 1 %.", "PASS"),
+    # DCGM rows of Dev's 2026-10-14 sheet (G17–G22)
+    ("gpu_util", D, T(G + ["Utilization %"], ["hgx-a", 0, "0%"], ["hgx-a", 1, "95%"], ["hgx-b", 0, "3%"]), "PASS"),
+    ("gpu_util", D, T(G + ["Utilization %"], ["hgx-a", 0, "0%"], ["hgx-a", 1, "40%"]), "FAIL"),
+    ("gpu_inventory", D, T(["Host", "GPU", "Model"], ["hgx-a", 0, "NVIDIA RTX A6000"], ["hgx-a", 1, "RTX A6000"],
+                           ["hgx-b", 0, "Tesla V100"]), "PASS"),
+    ("gpu_inventory", D, T(["Host", "GPU", "Model"], ["hgx-a", 0, "NVIDIA RTX A6000"], ["hgx-b", 0, "NVIDIA A6000"]),
+     "FAIL"),
+    ("gpu_framebuffer", D, T(G + ["FB Used (MiB)", "FB Free (MiB)", "FB Reserved (MiB)"], ["hgx-a", 0, 4800, 43000, 500],
+                             ["hgx-a", 1, "42.5 GiB", "4.2 GiB", "0.5 GiB"]), "PASS"),
+    ("gpu_framebuffer", D, T(G + ["Used (MiB)", "Free (MiB)"], ["hgx-a", 1, 4800, 43500]), "FAIL"),   # used / free swapped
+    ("gpu_xid", D, "In the last 7 days only hgx-a GPU 1 reported an XID (XID 79); hgx-a GPU 0 had none.", "PASS"),
+    ("gpu_xid", D, T(G + ["XID errors (7 d)"], ["hgx-a", 0, 0], ["hgx-a", 1, 79]), "PASS"),
+    ("gpu_xid", D, "No XID errors on any GPU in the last 7 days.", "FAIL"),
+    ("gpu_xid", D, T(G + ["XID errors (7 d)"], ["hgx-a", 0, 13], ["hgx-a", 1, 79]), "FAIL"),         # GPU 0 had none
 ]
-PARAM = {"gpu_util_chart": 1, "power_temp_window": 24, "gpu_idle": 5, "gpu_fleet_health": 85, "gpu_util_avg": 168}
+PARAM = {"gpu_util_chart": 1, "power_temp_window": 24, "gpu_idle": 5, "gpu_fleet_health": 85, "gpu_util_avg": 168,
+         "gpu_xid": 168}
 TOL = {"gpu_util_avg": 5}
 
 
@@ -244,6 +262,15 @@ def test_dcgm_lists_only_its_supported_metrics():
         FakeDcgm().alerts()
 
 
+def test_xid_none_in_the_window():
+    class Clean(FakeDcgm):
+        def over_time(self, fn, kind, hours):
+            return {"hgx-a:0": 0, "hgx-a:1": 0} if kind == "xid" else super().over_time(fn, kind, hours)
+    assert run("gpu_xid", Clean(), "No XID errors on any GPU in the last 7 days.").status == "PASS"
+    assert run("gpu_xid", Clean(), "XID metrics are not available from DCGM.").status == "FAIL"   # the series exists
+    assert run("gpu_xid", Clean(), "hgx-a GPU 0 logged XID 13 on Tuesday.").status == "FAIL"     # invented
+
+
 def test_gpu_reading_helpers():
     assert gpu.indexes("GPUs 0-3 idle") == {"0", "1", "2", "3"} and gpu.indexes("GPU 0, 1 and 2") == {"0", "1", "2"}
     assert [(v, u) for _, v, u in gpu.quantities("92°C, 142.1 W, 47,105 MiB, 50th, GPU1")] == \
@@ -260,7 +287,8 @@ def test_gpu_source_view_shows_the_compared_values():
 # ---------------------------------------------------------------- settings, sheet, plugin
 def test_gpu_sheet_and_registry():
     rows = load_prompts(settings.GPU_PROMPTS_XLSX)
-    assert [r.id for r in rows] == [f"G{i:02d}" for i in range(1, 17)] and all(r.check in CHECKS for r in rows)
+    assert [r.id for r in rows] == [f"G{i:02d}" for i in range(1, 23)] and all(r.check in CHECKS for r in rows)
+    assert all(r.applies_to == {"dcgm"} for r in rows[16:])                  # G17–G22: Dev's 2026-10-14 DCGM rows
     for key in ("prometheus", "dcgm"):
         c = settings.CONNECTORS[key]
         assert (c.prompts, c.needs_login) == (settings.GPU_PROMPTS_XLSX, False)
@@ -283,10 +311,12 @@ def test_each_connector_reads_its_own_sheet():
         def getoption(self, name):
             return self.opts[name]
     rows = {r.id: r for r in selected_prompts(Config())}
-    assert len(rows) == 36
+    assert len(rows) == 55                                    # 20 network + 22 GPU + 6 BCM + 7 Dynamo
     assert rows["P01"].applies_to == {"nexus", "catalyst", "zabbix", "ones"}
     assert rows["G06"].applies_to == {"prometheus", "dcgm"} and not rows["G06"].applies("ones")
-    assert [r.id for r in selected_prompts(Config("dcgm"))] == [f"G{i:02d}" for i in range(1, 17)]
+    assert [r.id for r in selected_prompts(Config("dcgm"))] == [f"G{i:02d}" for i in range(1, 23)]
+    assert [r.id for r in selected_prompts(Config("prometheus")) if r.applies("prometheus")] == \
+        [f"G{i:02d}" for i in range(1, 17)]
     assert len(selected_prompts(Config("dcgm", str(settings.PROMPTS_XLSX)))) == 20      # --excel: one sheet for all
 
 

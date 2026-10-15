@@ -36,12 +36,13 @@ FRESH_CHECKS = {"unhealthy_devices", "health_summary", "devices_fields", "models
 
 def run_case(row: PromptRow, conn: Connector, chat: NcpChat, src: Source) -> PromptResult:
     device, prompt = None, row.prompt
-    if "<DEVICE>" in prompt:
+    if "<DEVICE>" in prompt or "<MODEL>" in prompt:          # <MODEL>: Dynamo's source gives the served model
         try:
             device = src.device_for_prompts()
         except NoTruth as exc:
-            return _result(row, conn, prompt, None, Verdict("BLOCKED", f"no device for <DEVICE>: {exc}"))
-        prompt = prompt.replace("<DEVICE>", device.name)
+            slot = "<DEVICE>" if "<DEVICE>" in prompt else "<MODEL>"
+            return _result(row, conn, prompt, None, Verdict("BLOCKED", f"no device for {slot}: {exc}"))
+        prompt = prompt.replace("<DEVICE>", device.name).replace("<MODEL>", device.name)
     sent = f"{conn.tag} {prompt}".strip()
 
     first = _attempt(row, conn, chat, src, device, sent)

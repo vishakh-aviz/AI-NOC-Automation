@@ -10,11 +10,12 @@ Background and details: `CLAUDE.md` (start at §0).
 - **Python 3.10 or newer** and `pip`.
 - **A machine on the lab network** that reaches NCP (`10.4.5.10` since 2026-10-07) and the sources:
   Nexus Dashboard `10.20.11.3`, Catalyst Center `10.4.5.230`, Zabbix `10.4.4.177:8088`, ONES `10.20.0.37`,
-  Prometheus `10.20.0.41:9091` (Prometheus and DCGM).
+  Prometheus `10.20.0.41:9091` (Prometheus and DCGM), BCM `10.20.13.243:8081` (client-certificate PEM),
+  vLLM `10.4.5.33:8000` and `10.20.11.73:8120` (Dynamo).
 - **The `.env` file** in the project folder. Copy `.env.example` to `.env` and ask Dev for the values
   (NCP password, source logins). Never commit `.env` or paste it into a chat or ticket.
 - **The connector `#tags` exactly as in the NCP UI**: on 10.4.5.10 `#nexus-mcp`, `#catalyst-mcp`, `#zabbix`, `#ones-37-mcp`
-  (the ONES tag must point at the same ONES as `ONES_URL`), `#prometheus-mcp`, `#dcgm`.
+  (the ONES tag must point at the same ONES as `ONES_URL`), `#prometheus-mcp`, `#dcgm`, `#bcm`, `#dynamo-mcp`.
 
 ## 2. One-time setup
 
@@ -29,10 +30,10 @@ pip install -r requirements.txt
 
 | Step | Command | Expect |
 |---|---|---|
-| Self-tests (no network) | `pytest` | `190 passed` in ~15 s. If not, stop — setup problem |
-| Check the sources | `pytest test_sources.py` | 6 passed in ~10 s; one summary line per connector |
+| Self-tests (no network) | `pytest` | `261 passed` in ~15 s. If not, stop — setup problem |
+| Check the sources | `pytest test_sources.py` | 8 passed in ~30 s; one summary line per connector |
 | Smoke test (one prompt) | `pytest test_main.py --connectors ones --prompts P02` | 1 result in ~20 s |
-| Full run (112 tests) | `pytest test_main.py` | ~40–60 min; 6 connectors run side by side |
+| Full run (131 tests) | `pytest test_main.py` | ~40–60 min; 8 connectors run side by side |
 
 A live run first checks `.env` and the NCP login. If something is missing it stops at once
 (exit code 2) and names the key — fix `.env` and run again.
@@ -42,7 +43,7 @@ A live run first checks `.env` and the NCP login. If something is missing it sto
 | You want | Add |
 |---|---|
 | Some connectors | `--connectors zabbix,ones` (or `-k zabbix`) |
-| Some prompts | `--prompts P01,P07` (GPU: `G06`); GPU connectors only: `--connectors prometheus,dcgm` |
+| Some prompts | `--prompts P01,P07` (GPU: `G06`, BCM: `B03`, Dynamo: `V04`); GPU connectors only: `--connectors prometheus,dcgm`; BCM, Dynamo, DCGM: `--connectors bcm,dynamo,dcgm` |
 | One prompt, watch it live (console logs) | `-n 0` |
 | One prompt sheet for every selected connector | `--excel path/to/sheet.xlsx` (default: each connector's own sheet) |
 
@@ -78,7 +79,7 @@ reader" = an LLM copied NCP's answer into a table and the code graded that table
 |---|---|
 | `Blank in .env: …` | fill the named keys in `.env` |
 | `Cannot log in to NCP …` | check `NCP_HOST` / `NCP_PASSWORD`; log in to the NCP UI from the same machine |
-| `unrecognized arguments: -n 6 --dist loadgroup` | `pip install -r requirements.txt` (pytest-xdist missing) |
+| `unrecognized arguments: -n 8 --dist loadgroup` | `pip install -r requirements.txt` (pytest-xdist missing) |
 | Every prompt FAILs with a connection error | wrong socket URL: set `NCP_WS_URI` in `.env` |
 | A FAIL you think is wrong | repeat it once in a new chat: `pytest test_main.py --connectors X --prompts Pnn`; passes now = flaky, not a bug |
 
